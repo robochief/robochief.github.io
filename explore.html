@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>RoboChief in 3D</title>
+  <meta name="description" content="Interactive 3D model of RoboChief: rotate, zoom and explode it.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    #viewer { position: fixed; inset: 0; touch-action: none; }
+    .bar { position: fixed; left: 0; right: 0; padding: 1rem 16px; text-align: center; pointer-events: none; }
+    .bar > * { pointer-events: auto; }
+    .top { top: 0; display: flex; justify-content: space-between; align-items: baseline; }
+    .bottom { bottom: 1.5rem; }
+    #explode { width: min(60vw, 480px); vertical-align: middle; }
+    .hint { color: #888; font-size: 0.85rem; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./static/js/explore.js"></script>
+</head>
+
+<body>
+  <div id="viewer" role="img" aria-label="Interactive 3D model of RoboChief"></div>
+  <div class="bar top">
+    <a href="./">← RoboChief</a>
+    <span class="hint">Drag to rotate · scroll or pinch to zoom</span>
+  </div>
+  <div class="bar bottom">
+    <label for="explode">Explode</label>
+    <input id="explode" type="range" min="0" max="1" step="0.01" value="0">
+    <p class="hint">Motors, batteries and compute boards are simplified.</p>
+  </div>
+</body>
+
+</html>
