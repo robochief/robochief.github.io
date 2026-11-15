@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
@@ -18,8 +17,17 @@ const EXPLODE = [
   [/^lattepanda_body/, 0.06, 0],
 ];
 
+// Scroll timeline (0..1 over #scrolly): camera turns from top view to oblique, then the robot explodes.
+const TURN = [0.0, 0.45];
+const SPLIT = [0.5, 0.95];
+// Camera on a sphere around TARGET. Top view has the robot's front (+x) pointing up the screen.
+const TARGET = new THREE.Vector3(0, 0.06, 0);
+const FROM = { r: 2.0, polar: 0.001, azimuth: -Math.PI / 2 };
+const TO = { r: 1.6, polar: 1.0, azimuth: 0.6 };
+const TARGET_END = new THREE.Vector3(0, 0.14, 0); // exploded stack is taller
+
 const el = document.getElementById('viewer');
-const slider = document.getElementById('explode');
+const section = document.getElementById('scrolly');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); // transparent: page background shows through
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -27,14 +35,7 @@ el.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
-
 const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 10);
-camera.position.set(0.75, 0.6, 0.75);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.12, 0);
-controls.enableDamping = true;
-controls.autoRotate = true;
-controls.addEventListener('start', () => (controls.autoRotate = false));
 
 new ResizeObserver(() => {
   renderer.setSize(el.clientWidth, el.clientHeight);
@@ -61,17 +62,40 @@ new GLTFLoader().load('./static/models/robochief.glb', (gltf) => {
     const offset = radial.multiplyScalar(rule[1]).add(new THREE.Vector3(0, rule[2], 0));
     parts.push({ meshes, base: meshes.map((m) => m.position.clone()), offset });
   }
-  explode(+slider.value);
 });
 
-function explode(t) {
-  for (const p of parts) p.meshes.forEach((m, i) => m.position.copy(p.base[i]).addScaledVector(p.offset, t));
+const ease = (x) => x * x * (3 - 2 * x); // smoothstep
+const phase = (p, [a, b]) => ease(THREE.MathUtils.clamp((p - a) / (b - a), 0, 1));
+const lerp = THREE.MathUtils.lerp;
+const sph = new THREE.Spherical();
+const forced = new URLSearchParams(location.search).get('p'); // ?p=0..1 pins the timeline (screenshots)
+
+function scrollProgress() {
+  if (forced !== null) return +forced;
+  const r = section.getBoundingClientRect();
+  return THREE.MathUtils.clamp(-r.top / (r.height - window.innerHeight), 0, 1);
 }
-slider.addEventListener('input', () => explode(+slider.value));
-const initial = new URLSearchParams(location.search).get('explode');
-if (initial !== null) slider.value = initial;
+
+function update(p) {
+  const t = phase(p, TURN), e = phase(p, SPLIT);
+  // Portrait screens: back off so the width fits, most during the (wide) explode.
+  const fit = Math.max(1, 0.7 / camera.aspect) ** (0.5 + 0.5 * e);
+  sph.set((lerp(FROM.r, TO.r, t) + 0.3 * e) * fit, lerp(FROM.polar, TO.polar, t), lerp(FROM.azimuth, TO.azimuth, t));
+  // Robot starts in the upper part of the pinned view (visible right under the title), centres while turning.
+  const h = el.clientHeight, w = el.clientWidth;
+  camera.setViewOffset(w, h, 0, 0.2 * h * (1 - t), w, h);
+  const target = TARGET.clone().lerp(TARGET_END, e);
+  camera.position.setFromSpherical(sph).add(target);
+  camera.lookAt(target);
+  for (const q of parts) q.meshes.forEach((m, i) => m.position.copy(q.base[i]).addScaledVector(q.offset, e));
+
+  // fixed at the bottom of the screen; fades out as the viewer section scrolls up to the top
+  document.getElementById('hint').style.opacity = THREE.MathUtils.clamp(1 - window.scrollY / section.offsetTop, 0, 1);
+  for (const c of document.querySelectorAll('#scrolly .caption'))
+    c.classList.toggle('on', p >= +c.dataset.from && p < +c.dataset.to);
+}
 
 renderer.setAnimationLoop(() => {
-  controls.update();
+  update(scrollProgress());
   renderer.render(scene, camera);
 });
