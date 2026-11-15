@@ -8,6 +8,7 @@ export const EXPLODE = [
   [/^(wall_|tu_|fraunhofer|flw|iml)/, 0.15, 0.06],
   [/^wheel_/, 0.20, 0],
   [/^motor_holder_/, 0.10, 0],
+  [/^vesc_/, 0.10, 0.035], // lifts just clear of its holder, low enough not to hide the real-time core
   [/^motor_/, 0.03, 0.02],
   [/^hub_top/, 0, 0.12],
   [/^rt_core/, 0, 0.17], // just above the hub cap, low enough to be seen under the raised top plate
