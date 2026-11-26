@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>RoboChief demo</title>
+  <meta name="description" content="Drive a holonomic RoboChief in your browser: chase the cursor, send it to a pose, or follow a spline through waypoints.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro" rel="stylesheet">
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; background: #fff; }
+    #field { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; } /* canvas would otherwise show at its backing-store size, i.e. dpr times too big */
+    .bar { position: fixed; left: 0; right: 0; padding: 1rem 16px; text-align: center; pointer-events: none; }
+    .bar > * { pointer-events: auto; }
+    .top { top: 0; }
+    .top .back { position: absolute; left: 16px; top: 1.4rem; }
+    .bottom { bottom: 1.5rem; }
+    .hint { color: #888; font-size: 0.85rem; pointer-events: none; }
+    #console { display: inline-block; margin-top: 0.5rem; padding: 0.2rem 0.6rem; border-radius: 4px; background: #f3f3f3;
+               font: 0.85rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #333; pointer-events: none; }
+    @media (max-width: 600px) { .top .back { position: static; display: block; margin-bottom: 0.5rem; } }
+  </style>
+</head>
+
+<body>
+  <canvas id="field" aria-label="Top view of RoboChief driving around"></canvas>
+  <div class="bar top">
+    <a class="back" href="./">← RoboChief</a>
+    <div class="buttons has-addons is-centered" style="margin-bottom: 0.25rem">
+      <button class="button is-rounded" data-mode="chase">Chase</button>
+      <button class="button" data-mode="goal">Goal</button>
+      <button class="button is-rounded" data-mode="waypoints">Waypoints</button>
+    </div>
+    <p class="hint" id="hint"></p>
+    <p id="console" aria-live="off">0.00 m/s</p>
+  </div>
+  <div class="bar bottom" id="wp-controls" hidden>
+    <button class="button is-dark is-rounded" id="go">Go</button>
+    <button class="button is-rounded" id="clear">Clear</button>
+  </div>
+
+  <script>
+    // Top-view kiwi-drive toy. Holonomic: position and heading are controlled independently.
+    // Heading convention: image top = robot front, ang = 0 means facing up the screen.
+    const canvas = document.getElementById('field'), ctx = canvas.getContext('2d');
+    const img = new Image(); img.src = './static/images/robochief-top.png';
+    const HINTS = {
+      chase: 'Move the mouse or drag a finger, the robot follows (11 kg, up to 5 m/s² and 10 m/s).',
+      goal: 'Click or tap to set a goal, drag to set its orientation.',
+      waypoints: 'Tap to add waypoints, then press Go. The robot follows a Catmull-Rom spline through them.',
+    };
+
+    let W, H, size; // size: robot diameter in px (0.44 m)
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      W = innerWidth; H = innerHeight;
+      canvas.width = W * dpr; canvas.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      size = Math.min(160, 0.22 * Math.min(W, H));
+      makeSprite();
+    }
+    // Shrink the 716 px image to its on-screen size in halving steps: a single big drawImage
+    // downscale skips pixels and the plate's slots alias into noise.
+    let sprite = null;
+    function makeSprite() {
+      if (!img.complete || !img.naturalWidth) return;
+      const want = Math.round(size * (window.devicePixelRatio || 1));
+      let src = img, w = img.naturalWidth, h = img.naturalHeight;
+      do {
+        const nw = Math.max(want, Math.round(w / 2)), nh = Math.round(h * nw / w);
+        const c = Object.assign(document.createElement('canvas'), { width: nw, height: nh });
+        const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+        g.drawImage(src, 0, 0, nw, nh);
+        src = c; w = nw; h = nh;
+      } while (w > want);
+      sprite = src;
+    }
+    img.onload = makeSprite;
+    addEventListener('resize', resize); resize();
+
+    const robot = { x: W / 2, y: H / 2, vx: 0, vy: 0, ang: 0 };
+    let mode = 'chase';
+    let target = { x: W / 2, y: H / 2 };          // chase
+    let goal = null, draft = null;                 // goal: {x, y, ang}; draft while dragging
+    let wps = [], path = null;                     // waypoints, and the running trajectory
+
+    const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    const headingTo = (dx, dy) => Math.atan2(dy, dx) + Math.PI / 2;
+    function turnTowards(want, rate, dt) { robot.ang += wrap(want - robot.ang) * Math.min(1, rate * dt); }
+
+    // Physical limits, same in every mode. Velocities are in m/s; the screen scale is the robot's 0.44 m diameter.
+    const MASS = 11, AMAX = 5, VMAX = 10, DIAM = 0.44; // kg, m/s², m/s, m
+    const FMAX = MASS * AMAX;                            // 55 N: the most the drive can push
+    const ppm = () => size / DIAM;                       // px per metre
+
+    // Point-to-point drive: aim for the fastest speed it can still brake from in time (v = √(2·a·d)),
+    // push towards that with at most FMAX, integrate F = m·a. Brakes at 90 % of AMAX so it stops without overshoot.
+    function driveTo(p, dt) {
+      const k = ppm();
+      let vdx = 0, vdy = 0;
+      if (p) {
+        const ex = (p.x - robot.x) / k, ey = (p.y - robot.y) / k, d = Math.hypot(ex, ey);
+        const vd = Math.min(VMAX, Math.sqrt(2 * 0.9 * AMAX * d));
+        if (d > 1e-4) { vdx = ex / d * vd; vdy = ey / d * vd; }
+      }
+      let fx = MASS * (vdx - robot.vx) / 0.1, fy = MASS * (vdy - robot.vy) / 0.1; // close the speed error in ~0.1 s
+      const f = Math.hypot(fx, fy);
+      if (f > FMAX) { fx *= FMAX / f; fy *= FMAX / f; }
+      robot.vx += fx / MASS * dt; robot.vy += fy / MASS * dt;
+      const v = Math.hypot(robot.vx, robot.vy);
+      if (v > VMAX) { robot.vx *= VMAX / v; robot.vy *= VMAX / v; }
+      robot.x += robot.vx * k * dt; robot.y += robot.vy * k * dt;
+    }
+
+    // Time-optimal speed profile along a sampled curve, within a friction circle of AMAX:
+    // centripetal v²κ plus tangential acceleration never exceed AMAX, from rest to rest.
+    function timeProfile(curve) {
+      const k = ppm(), P = curve.pts, n = P.length;
+      const ds = (i) => (curve.s[i + 1] - curve.s[i]) / k;
+      const kappa = P.map((b, i) => { // Menger curvature through neighbours, 1/m
+        const a = P[i - 1], c = P[i + 1];
+        if (!a || !c) return 0;
+        const cross = Math.abs((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x));
+        const den = Math.hypot(b.x - a.x, b.y - a.y) * Math.hypot(c.x - b.x, c.y - b.y) * Math.hypot(c.x - a.x, c.y - a.y);
+        return den ? 2 * cross / den * k : 0;
+      });
+      const v = kappa.map((q) => Math.min(VMAX, q > 1e-6 ? Math.sqrt(AMAX / q) : VMAX));
+      const along = (i, vi) => Math.sqrt(Math.max(0, AMAX ** 2 - (vi * vi * kappa[i]) ** 2));
+      v[0] = v[n - 1] = 0;
+      for (let i = 1; i < n; i++) v[i] = Math.min(v[i], Math.sqrt(v[i - 1] ** 2 + 2 * along(i - 1, v[i - 1]) * ds(i - 1)));
+      for (let i = n - 2; i >= 0; i--) v[i] = Math.min(v[i], Math.sqrt(v[i + 1] ** 2 + 2 * along(i + 1, v[i + 1]) * ds(i)));
+      const t = [0];
+      for (let i = 1; i < n; i++) t.push(t[i - 1] + 2 * ds(i - 1) / Math.max(1e-6, v[i - 1] + v[i]));
+      return { curve, t, v, T: t.at(-1), time: 0 };
+    }
+
+    // Centripetal Catmull-Rom through pts (no cusps or self-loops), sampled into a polyline with arc length.
+    function catmullRom(pts, steps = 512) {
+      const P = [{ x: 2 * pts[0].x - pts[1].x, y: 2 * pts[0].y - pts[1].y }, ...pts,
+                 { x: 2 * pts.at(-1).x - pts.at(-2).x, y: 2 * pts.at(-1).y - pts.at(-2).y }];
+      const out = [pts[0]];
+      for (let i = 0; i + 3 < P.length; i++) {
+        const [p0, p1, p2, p3] = P.slice(i, i + 4);
+        const d = (a, b) => Math.max(1e-6, Math.hypot(b.x - a.x, b.y - a.y) ** 0.5);
+        const t0 = 0, t1 = t0 + d(p0, p1), t2 = t1 + d(p1, p2), t3 = t2 + d(p2, p3);
+        const lerp = (a, b, ta, tb, t) => ({ x: ((tb - t) * a.x + (t - ta) * b.x) / (tb - ta), y: ((tb - t) * a.y + (t - ta) * b.y) / (tb - ta) });
+        for (let k = 1; k <= steps; k++) { // Barry-Goldman pyramid
+          const t = t1 + (t2 - t1) * k / steps;
+          const a1 = lerp(p0, p1, t0, t1, t), a2 = lerp(p1, p2, t1, t2, t), a3 = lerp(p2, p3, t2, t3, t);
+          const b1 = lerp(a1, a2, t0, t2, t), b2 = lerp(a2, a3, t1, t3, t);
+          out.push(lerp(b1, b2, t1, t2, t));
+        }
+      }
+      const s = [0];
+      for (let i = 1; i < out.length; i++) s.push(s[i - 1] + Math.hypot(out[i].x - out[i - 1].x, out[i].y - out[i - 1].y));
+      return { pts: out, s, length: s.at(-1) };
+    }
+    const preview = () => (wps.length ? catmullRom([{ x: robot.x, y: robot.y }, ...wps]) : null);
+
+    // input
+    const at = (e) => ({ x: e.clientX, y: e.clientY });
+    canvas.addEventListener('pointerdown', (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      const p = at(e);
+      if (mode === 'chase') target = p;
+      if (mode === 'goal') draft = { ...p, ang: goal ? goal.ang : robot.ang };
+      if (mode === 'waypoints' && !path) wps.push(p);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      const p = at(e);
+      if (mode === 'chase') target = p;
+      if (mode === 'goal' && draft && Math.hypot(p.x - draft.x, p.y - draft.y) > 12) draft.ang = headingTo(p.x - draft.x, p.y - draft.y);
+    });
+    canvas.addEventListener('pointerup', () => { if (draft) { goal = draft; draft = null; } });
+    document.getElementById('go').onclick = () => {
+      if (!wps.length) return;
+      path = timeProfile(preview());
+      robot.vx = robot.vy = 0;
+    };
+    document.getElementById('clear').onclick = () => { wps = []; path = null; };
+
+    function setMode(m) {
+      mode = m; draft = null; path = null;
+      if (m === 'goal') goal = null;
+      if (m === 'chase') target = { x: robot.x, y: robot.y };
+      document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('is-dark', b.dataset.mode === m));
+      document.getElementById('hint').textContent = HINTS[m];
+      document.getElementById('wp-controls').hidden = m !== 'waypoints';
+    }
+    document.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+    setMode('chase');
+
+    function update(dt) {
+      if (mode === 'chase') {
+        driveTo(target, dt);
+        const dx = target.x - robot.x, dy = target.y - robot.y;
+        if (dx * dx + dy * dy > 400) turnTowards(headingTo(dx, dy), 3, dt); // 20 px dead zone, else it spins
+      } else if (mode === 'goal') {
+        driveTo(goal, dt); // no goal yet: brake to a stop
+        if (goal) turnTowards(goal.ang, 4, dt);
+      } else if (path) {
+        // play the precomputed profile back in time
+        path.time = Math.min(path.T, path.time + dt);
+        let i = path.i ?? 1; // time only moves forward, so resume the search where the last step ended
+        while (i < path.t.length - 1 && path.t[i] < path.time) i++;
+        path.i = i;
+        const a = path.curve.pts[i - 1], b = path.curve.pts[i];
+        // constant acceleration within each sample step, as the profile assumes (no speed steps at sample points)
+        const tau = path.time - path.t[i - 1], dur = path.t[i] - path.t[i - 1] || 1, va = path.v[i - 1], vb = path.v[i];
+        const f = Math.min(1, (va * tau + 0.5 * (vb - va) / dur * tau * tau) / (0.5 * (va + vb) * dur || 1));
+        robot.x = a.x + (b.x - a.x) * f; robot.y = a.y + (b.y - a.y) * f;
+        const sp = va + (vb - va) * tau / dur, len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        robot.vx = (b.x - a.x) / len * sp; robot.vy = (b.y - a.y) / len * sp;
+        turnTowards(headingTo(b.x - a.x, b.y - a.y), 6, dt);
+        if (path.time >= path.T) { path = null; wps = []; robot.vx = robot.vy = 0; }
+      } else driveTo(null, dt); // waiting for Go: brake to a stop
+    }
+
+    function drawRobot(x, y, ang, alpha = 1) {
+      if (!sprite) return;
+      const h = size * sprite.height / sprite.width;
+      ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.rotate(ang);
+      ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 16; ctx.shadowOffsetY = 6;
+      ctx.drawImage(sprite, -size / 2, -h / 2, size, h);
+      ctx.restore();
+    }
+    function arrow(x, y, ang, len, color) {
+      const ex = x + Math.sin(ang) * len, ey = y - Math.cos(ang) * len;
+      ctx.strokeStyle = ctx.fillStyle = color; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.save(); ctx.translate(ex, ey); ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(0, -2); ctx.lineTo(-7, 10); ctx.lineTo(7, 10); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      if (mode === 'goal') for (const g of [goal, draft]) if (g) { drawRobot(g.x, g.y, g.ang, 0.18); arrow(g.x, g.y, g.ang, size * 0.7, '#e33'); }
+      const curve = path ? path.curve : mode === 'waypoints' && preview();
+      if (curve) {
+        ctx.setLineDash([6, 6]); ctx.strokeStyle = '#999'; ctx.lineWidth = 2;
+        ctx.beginPath(); curve.pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (mode === 'waypoints') wps.forEach((p, i) => {
+        ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, 2 * Math.PI); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = '600 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(i + 1, p.x, p.y + 0.5);
+      });
+      drawRobot(robot.x, robot.y, robot.ang);
+    }
+
+    const speedEl = document.getElementById('console');
+    // Physics runs at a fixed 1 kHz, independent of the screen; drawing happens once per display frame
+    // (60 Hz on most screens, 120/144 Hz on high-refresh ones; browsers never paint faster than that).
+    const STEP = 0.001;
+    let last = performance.now(), acc = 0;
+    requestAnimationFrame(function frame(t) {
+      const dt = Math.min((t - last) / 1000, 0.05); last = t; // clamp tab-switch jumps
+      for (acc += dt; acc >= STEP; acc -= STEP) update(STEP);
+      draw();
+      speedEl.textContent = `${Math.hypot(robot.vx, robot.vy).toFixed(2).padStart(5)} m/s`;
+      requestAnimationFrame(frame);
+    });
+  </script>
+</body>
+
+</html>
