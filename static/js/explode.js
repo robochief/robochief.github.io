@@ -48,18 +48,15 @@ export function setExplode(parts, e) {
 const INFO = [
   [/^top_alu_plate/, 'Top plate', 'Black aluminium deck, carries up to 25 kg of payload.'],
   [/^bottom_steel_plate/, 'Bottom plate', 'Steel chassis base: everything else bolts onto it.'],
-  [/^wall_/, 'Side wall', '3D-printed body panel.'],
-  [/^tu_dortmund/, 'TU Dortmund panel', '3D-printed body panel with the TU Dortmund logo.'],
-  [/^(fraunhofer|iml)/, 'Fraunhofer IML panel', '3D-printed body panel with the Fraunhofer IML wordmark.'],
-  [/^flw/, 'FLW panel', '3D-printed body panel with the FLW logo.'],
+  [/^(wall_|tu_|fraunhofer|flw|iml)/, 'Body panel', '3D-printed side panel.'],
   [/^wheel_/, 'Omni wheel', '100 mm, with free rollers so it can slide sideways. Three at 120° make the kiwi drive.'],
   [/^motor_holder_/, 'Motor holder', '3D-printed mount that fixes a motor to the chassis.'],
   [/^motor_/, 'Drive motor', 'Brushless DC motor with a 4.3:1 planetary gearbox.'],
   [/^hub_/, 'Centre hub', '3D-printed hub that ties the three motor mounts together.'],
   [/^rt_core/, 'Real-time core (optional)', 'Microcontroller board for low-latency motor control.'],
-  [/^battery_holder_/, 'Battery holder', '3D-printed mount for a 36 V tool battery.'],
-  [/^battery_/, '36 V tool battery', 'One of two packs, together good for 8 h of mixed use.'],
-  [/^lattepanda_board/, 'Compute', 'x86 + ARM compute on its carrier board.'],
+  [/^battery_holder_/, 'Battery holder', '3D-printed holder for an 18 V tool battery.'],
+  [/^battery_/, '18 V tool battery', 'One of two packs in series, for a 36 V bus and 8 h of mixed use.'],
+  [/^lattepanda_board/, 'Compute', 'Single-board computer, x86 or ARM.'],
   [/^lattepanda_body/, 'Compute housing', '3D-printed enclosure for the main computer.'],
 ];
 

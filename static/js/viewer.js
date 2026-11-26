@@ -7,9 +7,9 @@ import { prepareParts, setExplode, hoverInfo } from './explode.js';
 // side ('left'/'right') on landscape screens, band ('top'/'bottom') on portrait ones.
 const CALLOUTS = [
   ['top_alu_plate', '<b>25 kg payload</b>'],
-  ['lattepanda_board', '<b>x86 + ARM compute</b>', { band: 'top' }],
+  ['lattepanda_board', '<b>x86 or ARM compute</b>', { band: 'top' }],
   ['rt_core', '<b>Optional real-time core</b>', { side: 'left', band: 'bottom' }],
-  ['battery_left', '<b>Dual 36 V tool batteries</b><br>8 h mixed use', { band: 'bottom' }],
+  ['battery_left', '<b>Two 18 V tool batteries</b><br>36 V, 8 h mixed use', { band: 'bottom' }],
   ['wheel_front', '<b>Holonomic kiwi drive</b>'],
   ['lattepanda_body', '<b>3D-printed parts</b><br>mounts, hub and housings'], // printed compute housing, sits on the left
 ];
