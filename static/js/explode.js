@@ -43,3 +43,72 @@ export function prepareParts(root) {
 export function setExplode(parts, e) {
   for (const q of Object.values(parts)) q.meshes.forEach((m, i) => m.position.copy(q.base[i]).addScaledVector(q.offset, e));
 }
+
+// What each part is, shown on hover. First match wins.
+const INFO = [
+  [/^top_alu_plate/, 'Top plate', 'Black aluminium deck, carries up to 25 kg of payload.'],
+  [/^bottom_steel_plate/, 'Bottom plate', 'Steel chassis base: everything else bolts onto it.'],
+  [/^wall_/, 'Side wall', '3D-printed body panel.'],
+  [/^tu_dortmund/, 'TU Dortmund panel', '3D-printed body panel with the TU Dortmund logo.'],
+  [/^(fraunhofer|iml)/, 'Fraunhofer IML panel', '3D-printed body panel with the Fraunhofer IML wordmark.'],
+  [/^flw/, 'FLW panel', '3D-printed body panel with the FLW logo.'],
+  [/^wheel_/, 'Omni wheel', '100 mm, with free rollers so it can slide sideways. Three at 120° make the kiwi drive.'],
+  [/^motor_holder_/, 'Motor holder', '3D-printed mount that fixes a motor to the chassis.'],
+  [/^motor_/, 'Drive motor', 'Brushless DC motor with a 4.3:1 planetary gearbox.'],
+  [/^hub_/, 'Centre hub', '3D-printed hub that ties the three motor mounts together.'],
+  [/^rt_core/, 'Real-time core (optional)', 'Microcontroller board for low-latency motor control.'],
+  [/^battery_holder_/, 'Battery holder', '3D-printed mount for a 36 V tool battery.'],
+  [/^battery_/, '36 V tool battery', 'One of two packs, together good for 8 h of mixed use.'],
+  [/^lattepanda_board/, 'Compute', 'x86 + ARM compute on its carrier board.'],
+  [/^lattepanda_body/, 'Compute housing', '3D-printed enclosure for the main computer.'],
+];
+
+// Hover (or tap) a part to highlight it and show what it is, while active() is true.
+// Returns a function to call every frame, so the tooltip follows scrolling and auto-rotation.
+export function hoverInfo(camera, canvas, parts, active) {
+  const tip = document.createElement('div');
+  Object.assign(tip.style, {
+    position: 'fixed', pointerEvents: 'none', display: 'none', maxWidth: '16rem', padding: '0.5rem 0.75rem',
+    background: 'rgba(255,255,255,0.95)', border: '1px solid #ddd', borderRadius: '6px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.12)', fontSize: '0.85rem', lineHeight: 1.35, color: '#555', zIndex: 10,
+  });
+  document.body.appendChild(tip);
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), glow = new Map();
+  let pointer = null, lit = null;
+  const track = (ev) => (pointer = { x: ev.clientX, y: ev.clientY });
+  canvas.addEventListener('pointermove', track);
+  canvas.addEventListener('pointerdown', track); // touch: tap to inspect
+  canvas.addEventListener('pointerleave', (ev) => ev.pointerType === 'mouse' && (pointer = null));
+
+  const light = (name, on) => parts[name]?.meshes.forEach((m) => {
+    if (on) {
+      m.userData.mat ??= m.material;
+      if (!glow.has(m.userData.mat)) glow.set(m.userData.mat, Object.assign(m.userData.mat.clone(), { emissive: new THREE.Color(0x335577) }));
+      m.material = glow.get(m.userData.mat);
+    } else if (m.userData.mat) m.material = m.userData.mat;
+  });
+
+  return () => {
+    let hit = null;
+    if (pointer && active()) {
+      const r = canvas.getBoundingClientRect();
+      ndc.set((pointer.x - r.left) / r.width * 2 - 1, -(pointer.y - r.top) / r.height * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const meshes = Object.values(parts).flatMap((q) => q.meshes);
+      hit = ray.intersectObjects(meshes, false)[0]?.object.name.split('__')[0] ?? null;
+    }
+    if (hit !== lit) {
+      if (lit) light(lit, false);
+      if (hit) light(hit, true);
+      lit = hit;
+      const info = hit && INFO.find(([re]) => re.test(hit));
+      tip.innerHTML = info ? `<b style="color:#222">${info[1]}</b><br>${info[2]}` : '';
+      tip.style.display = info ? 'block' : 'none';
+      canvas.style.cursor = hit ? 'help' : '';
+    }
+    if (hit) {
+      const x = Math.min(pointer.x + 14, window.innerWidth - tip.offsetWidth - 8);
+      Object.assign(tip.style, { left: `${Math.max(8, x)}px`, top: `${Math.max(8, pointer.y - tip.offsetHeight - 14)}px` });
+    }
+  };
+}

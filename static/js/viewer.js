@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { prepareParts, setExplode } from './explode.js';
+import { prepareParts, setExplode, hoverInfo } from './explode.js';
 
 // Spec callouts pinned to parts once the robot is exploded. Optional third entry forces placement:
 // side ('left'/'right') on landscape screens, band ('top'/'bottom') on portrait ones.
@@ -46,10 +46,12 @@ new ResizeObserver(() => {
 
 let robot = null;
 let parts = {}; // name -> { meshes, base positions, box, center, offset }
+let hover = () => {};
 new GLTFLoader().load('./static/models/robochief.glb', (gltf) => {
   robot = gltf.scene;
   scene.add(robot);
   parts = prepareParts(robot);
+  hover = hoverInfo(camera, renderer.domElement, parts, () => scrollProgress() >= SPLIT[1]); // fully exploded only
 });
 
 // Callout DOM: a label plus a leader line and dot per entry.
@@ -97,8 +99,10 @@ function update(p) {
     setExplode(parts, e);
   }
 
-  // fixed at the bottom of the screen; fades out as the viewer section scrolls up to the top
-  document.getElementById('hint').style.opacity = clamp(1 - window.scrollY / section.offsetTop, 0, 1);
+  // scroll hint (fixed at the bottom) and title fade out as the viewer section scrolls up to the top
+  const intro = clamp(1 - window.scrollY / section.offsetTop, 0, 1);
+  document.getElementById('hint').style.opacity = intro;
+  document.getElementById('title').style.opacity = intro; // title and authors fade out together
   for (const c of document.querySelectorAll('#scrolly .caption'))
     c.classList.toggle('on', p >= +c.dataset.from && p < +c.dataset.to);
 
@@ -170,5 +174,6 @@ function placeCallouts(e, w, h) {
 
 renderer.setAnimationLoop(() => {
   update(scrollProgress());
+  hover();
   renderer.render(scene, camera);
 });

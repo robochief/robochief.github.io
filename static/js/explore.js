@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { prepareParts, setExplode } from './explode.js';
+import { prepareParts, setExplode, hoverInfo } from './explode.js';
 
 const el = document.getElementById('viewer');
 const slider = document.getElementById('explode');
@@ -34,14 +34,17 @@ new ResizeObserver(() => {
 }).observe(el);
 
 let parts = {};
+let hover = () => {};
 new GLTFLoader().load('./static/models/robochief.glb', (gltf) => {
   scene.add(gltf.scene);
   parts = prepareParts(gltf.scene);
   setExplode(parts, +slider.value);
+  hover = hoverInfo(camera, renderer.domElement, parts, () => true);
 });
 slider.addEventListener('input', () => setExplode(parts, +slider.value));
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  hover();
   renderer.render(scene, camera);
 });
